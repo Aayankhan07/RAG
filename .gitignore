@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Python Packages & Virtual Environments
+venv/
+.venv/
+env/
+*.egg-info/
+build/
+dist/
+.packages/
