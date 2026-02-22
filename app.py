@@ -4,6 +4,8 @@ import tempfile
 
 import streamlit as st
 
+from dotenv import load_dotenv
+load_dotenv()
 
 PROJECT_PACKAGES_DIR = os.path.join(os.path.dirname(__file__), ".packages")
 
