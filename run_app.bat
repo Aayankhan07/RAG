@@ -5,9 +5,8 @@ cd /d "%~dp0"
 
 echo Checking GROQ_API_KEY...
 if not defined GROQ_API_KEY (
-  echo [WARN] GROQ_API_KEY is not set. The chat model will not work.
-  echo Set it with: setx GROQ_API_KEY YOUR_KEY
-  echo Then restart your terminal to pick up the variable.
+  echo GROQ_API_KEY is not set.
+  set /p GROQ_API_KEY=Enter GROQ_API_KEY:
 )
 
 echo Installing Python dependencies...

@@ -3,6 +3,7 @@ import sys
 import tempfile
 
 import streamlit as st
+import psycopg2
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -39,10 +40,8 @@ def load_vectorstore() -> Chroma:
 
 
 @st.cache_resource
-def get_chat_groq() -> ChatGroq:
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
-    )
+def get_chat_groq(api_key: str) -> ChatGroq:
+    llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=api_key)
     return llm
 
 
@@ -54,100 +53,138 @@ def main() -> None:
     st.set_page_config(page_title="RAG Chat (Groq)", page_icon="🧠")
     st.title("RAG Chat over your PDFs (Groq)")
 
-    if not os.path.isdir(CHROMA_DIR):
-        st.error("Chroma database not found. Run ingest.py to create chroma_db first.")
-        return
-
     try:
         vectorstore = load_vectorstore()
     except Exception as exc:
         st.error(f"Failed to load Chroma database: {exc}")
         return
 
+    # Initialize session state for messages early so the clear button can use it
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = []
+
+    with st.sidebar:
+        st.header("Settings & Tools")
+        
+        # 1. The Clear Chat Button
+        if st.button("🗑️ Clear Chat History"):
+            st.session_state["messages"] = []
+            st.success("Chat history cleared!")
+
+        st.divider() 
+        
+        # 2. PDF Uploader (API key text box removed entirely)
+        st.header("Knowledge Base")
+        uploaded_file = st.file_uploader("Upload a new PDF", type=["pdf"])
+
+        # Track processed files so we don't re-index on every app interaction
+        if "processed_files" not in st.session_state:
+            st.session_state["processed_files"] = set()
+
+        if uploaded_file is not None:
+            # Check if we have already indexed this exact file
+            if uploaded_file.name not in st.session_state["processed_files"]:
+                with st.spinner("Reading and indexing your PDF..."):
+                    tmp_path = None
+                    try:
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                            tmp_file.write(uploaded_file.getbuffer())
+                            tmp_path = tmp_file.name
+
+                        loader = PyPDFLoader(tmp_path)
+                        documents = loader.load()
+
+                        splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=500,
+                            chunk_overlap=50,
+                        )
+                        splits = splitter.split_documents(documents)
+
+                        vectorstore.add_documents(splits)
+                        
+                        # Mark this file as processed in the session state
+                        st.session_state["processed_files"].add(uploaded_file.name)
+                        st.success("PDF processed and added to the knowledge base.")
+                    except Exception as exc:
+                        st.error(f"Failed to process uploaded PDF: {exc}")
+                    finally:
+                        if tmp_path and os.path.exists(tmp_path):
+                            try:
+                                os.remove(tmp_path)
+                            except OSError:
+                                pass
+            else:
+                # If already processed, just show a persistent success message
+                st.success(f"'{uploaded_file.name}' is loaded and ready.")
+        
+        st.header("Database")
+        db_status = "Not configured"
+        db_url = os.environ.get("DATABASE_URL")
+        if db_url:
+            try:
+                conn = psycopg2.connect(dsn=db_url, connect_timeout=5)
+                conn.close()
+                db_status = "Connected"
+            except Exception as exc:
+                db_status = f"Error: {exc}"
+        st.write(f"Postgres: {db_status}")
+
+    # Pull the key invisibly from your .env file
+    api_key = os.environ.get("GROQ_API_KEY")
+
+    if not api_key:
+        st.error("Groq API Key is missing. Please add it to your .env file.")
+        return
+        
     try:
-        llm = get_chat_groq()
+        llm = get_chat_groq(api_key)
     except Exception as exc:
         st.error(f"Failed to initialize ChatGroq: {exc}")
         return
 
-    with st.sidebar:
-        st.header("Knowledge base")
-        uploaded_file = st.file_uploader("Upload a PDF", type=["pdf"])
-
-        if uploaded_file is not None:
-            with st.spinner("Reading and indexing your PDF..."):
-                tmp_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-                        tmp_file.write(uploaded_file.getbuffer())
-                        tmp_path = tmp_file.name
-
-                    loader = PyPDFLoader(tmp_path)
-                    documents = loader.load()
-
-                    splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=500,
-                        chunk_overlap=50,
-                    )
-                    splits = splitter.split_documents(documents)
-
-                    vectorstore.add_documents(splits)
-                    st.success("PDF processed and added to the knowledge base.")
-                except Exception as exc:
-                    st.error(f"Failed to process uploaded PDF: {exc}")
-                finally:
-                    if tmp_path and os.path.exists(tmp_path):
-                        try:
-                            os.remove(tmp_path)
-                        except OSError:
-                            pass
-
-    if "messages" not in st.session_state:
-        st.session_state["messages"] = []
-
+    # Render existing chat messages
     for message in st.session_state["messages"]:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
+    # User input
     user_input = st.chat_input("Ask a question about your documents")
 
-    if not user_input:
-        return
+    if user_input:
+        st.session_state["messages"].append({"role": "user", "content": user_input})
 
-    st.session_state["messages"].append({"role": "user", "content": user_input})
+        with st.chat_message("user"):
+            st.markdown(user_input)
 
-    with st.chat_message("user"):
-        st.markdown(user_input)
+        with st.chat_message("assistant"):
+            placeholder = st.empty()
+            placeholder.markdown("Searching your documents and thinking...")
 
-    with st.chat_message("assistant"):
-        placeholder = st.empty()
-        placeholder.markdown("Searching your documents and thinking...")
+            try:
+                docs = vectorstore.similarity_search(user_input, k=3)
+            except Exception as exc:
+                placeholder.markdown(f"Error during similarity search: {exc}")
+                return
 
-        try:
-            docs = vectorstore.similarity_search(user_input, k=3)
-        except Exception as exc:
-            placeholder.markdown(f"Error during similarity search: {exc}")
-            return
+            if not docs:
+                answer = "I could not find any relevant context in the knowledge base."
+                placeholder.markdown(answer)
+                st.session_state["messages"].append(
+                    {"role": "assistant", "content": answer}
+                )
+                return
 
-        if not docs:
-            answer = "I could not find any relevant context in the knowledge base."
+            context = build_context(docs)
+            filled_prompt = PROMPT_TEMPLATE.format(context=context, question=user_input)
+
+            try:
+                response = llm.invoke(filled_prompt)
+                answer = response.content
+            except Exception as exc:
+                answer = f"Error from Groq LLM: {exc}"
+
             placeholder.markdown(answer)
-            st.session_state["messages"].append(
-                {"role": "assistant", "content": answer}
-            )
-            return
-
-        context = build_context(docs)
-        filled_prompt = PROMPT_TEMPLATE.format(context=context, question=user_input)
-
-        try:
-            response = llm.invoke(filled_prompt)
-            answer = response.content
-        except Exception as exc:
-            answer = f"Error from Groq LLM: {exc}"
-
-        placeholder.markdown(answer)
-        st.session_state["messages"].append({"role": "assistant", "content": answer})
+            st.session_state["messages"].append({"role": "assistant", "content": answer})
 
 
 if __name__ == "__main__":
