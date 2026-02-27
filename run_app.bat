@@ -3,11 +3,7 @@ setlocal
 
 cd /d "%~dp0"
 
-echo Checking GROQ_API_KEY...
-if not defined GROQ_API_KEY (
-  echo GROQ_API_KEY is not set.
-  set /p GROQ_API_KEY=Enter GROQ_API_KEY:
-)
+echo Loading from .env...
 
 echo Installing Python dependencies...
 python -m pip install --upgrade pip >nul 2>&1
