@@ -1,5 +1,8 @@
 langchain
+langchain-classic
 langchain-community
+langchain-chroma
+langchain-huggingface
 chromadb
 pypdf
 sentence-transformers
@@ -7,4 +10,9 @@ streamlit
 langchain-groq
 python-dotenv
 psycopg2-binary
-python-dotenv
+fastapi
+uvicorn
+langchain-google-genai
+langchain-experimental
+rank-bm25
+python-multipart
